@@ -53,11 +53,24 @@ function RoomPage() {
   const [guesses, setGuesses] = useState<Guess[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [opponentGuess, setOpponentGuess] = useState<{ position: number; digit: number } | null>(
+    null,
+  );
   const joinAttempted = useRef(false);
+  const playerIdRef = useRef("");
 
   useEffect(() => {
-    setPlayerId(getPlayerId());
+    const id = getPlayerId();
+    setPlayerId(id);
+    playerIdRef.current = id;
   }, []);
+
+  // Auto-dismiss the opponent guess modal after 2s
+  useEffect(() => {
+    if (!opponentGuess) return;
+    const t = setTimeout(() => setOpponentGuess(null), 2000);
+    return () => clearTimeout(t);
+  }, [opponentGuess]);
 
   // Initial load + realtime
   useEffect(() => {
@@ -94,7 +107,11 @@ function RoomPage() {
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "guesses", filter: `room_id=eq.${roomId}` },
         (payload) => {
-          setGuesses((prev) => [...prev, payload.new as Guess]);
+          const inserted = payload.new as Guess;
+          setGuesses((prev) => [...prev, inserted]);
+          if (inserted.player_id !== playerIdRef.current) {
+            setOpponentGuess({ position: inserted.position, digit: inserted.digit });
+          }
         },
       )
       .on(
@@ -198,6 +215,11 @@ function RoomPage() {
   return (
     <Shell>
       <Toaster theme="dark" position="top-center" richColors />
+      {opponentGuess && (
+        <OpponentGuessModal
+          text={`O adversário acha que o ${ordinal(opponentGuess.position + 1)} número é ${opponentGuess.digit}`}
+        />
+      )}
       <Header room={room} playerId={playerId} onLeave={() => navigate({ to: "/" })} />
       <ScoreBar room={room} playerId={playerId} />
       {room.status === "waiting" && <WaitingView room={room} />}
@@ -222,11 +244,21 @@ function RoomPage() {
   );
 }
 
+function OpponentGuessModal({ text }: { text: string }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 sm:pt-24 px-4 pointer-events-none">
+      <div className="pointer-events-auto w-full max-w-xs sm:max-w-sm rounded-2xl border border-primary/40 bg-card/95 backdrop-blur px-4 sm:px-5 py-3 sm:py-4 shadow-glow text-center animate-in fade-in zoom-in-95 duration-200">
+        <p className="text-sm font-semibold text-foreground">{text}</p>
+      </div>
+    </div>
+  );
+}
+
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <Toaster theme="dark" position="top-center" richColors />
-      <div className="max-w-2xl mx-auto p-4 md:p-8">{children}</div>
+      <div className="max-w-2xl mx-auto p-3 sm:p-6 md:p-8">{children}</div>
     </div>
   );
 }
@@ -316,7 +348,7 @@ function WaitingView({ room }: { room: Room }) {
       <h2 className="text-lg font-bold">Aguardando 2º jogador...</h2>
       <p className="text-sm text-muted-foreground mt-1">Compartilhe este link para começar</p>
       <div className="mt-4 p-3 rounded-xl bg-input border border-border flex items-center gap-2">
-        <span className="text-xs font-mono truncate flex-1 text-left">{url}</span>
+        <span className="text-xs font-mono truncate min-w-0 flex-1 text-left">{url}</span>
         <button
           onClick={() => {
             navigator.clipboard.writeText(url);
@@ -579,7 +611,7 @@ function PlayView({
           </span>
         </div>
         <DigitBoard board={myBoard} />
-        <GuessHistory guesses={myGuesses} board={myBoard} />
+        <GuessHistory board={myBoard} />
       </div>
 
       {/* Turn / input */}
@@ -594,26 +626,24 @@ function PlayView({
               <p className="text-sm text-muted-foreground">
                 Sua vez — adivinhe o <b>{ordinal(myProgress + 1)}</b> algarismo
               </p>
-              <div className="mt-3 flex gap-2">
+              <div className="mt-3 flex flex-col gap-2">
                 <input
                   value={guess}
                   onChange={(e) => setGuess(e.target.value.replace(/\D/g, "").slice(0, 1))}
                   inputMode="numeric"
                   autoFocus
                   onKeyDown={(e) => e.key === "Enter" && submitGuess()}
-                  className="flex-1 h-14 px-4 rounded-xl bg-input border border-border text-center text-2xl font-mono focus:outline-none focus:border-primary"
+                  className="w-full h-14 px-4 rounded-xl bg-input border border-border text-center text-2xl font-mono focus:outline-none focus:border-primary"
                   placeholder="?"
                 />
                 <button
                   onClick={submitGuess}
-                  className="h-14 px-6 rounded-xl bg-primary text-primary-foreground font-bold"
+                  className="w-full h-12 rounded-xl bg-primary text-primary-foreground font-bold flex items-center justify-center gap-2"
                 >
                   <Sparkles className="w-5 h-5" />
+                  Confirmar
                 </button>
               </div>
-              <p className="text-xs text-muted-foreground mt-2">
-                Dica: {hintForPosition(myBoard[myProgress])}
-              </p>
             </>
           ) : (
             <p className="text-sm text-center text-muted-foreground py-3">
@@ -713,19 +743,17 @@ function NextRoundControls({ room, isCreator }: { room: Room; isCreator: boolean
 
 // -------- helpers --------
 
+type Attempt = { digit: number; feedback: "higher" | "lower" };
+
 type Cell = {
   known: number | null;
-  lower: number; // exclusive; digit must be > lower
-  upper: number; // exclusive; digit must be < upper
-  wrongs: number[];
+  attempts: Attempt[];
 };
 
 function buildBoard(playerGuesses: Guess[], digits: number): Cell[] {
   const board: Cell[] = Array.from({ length: digits }, () => ({
     known: null,
-    lower: -1,
-    upper: 10,
-    wrongs: [],
+    attempts: [],
   }));
   // Sort by created_at
   const sorted = [...playerGuesses].sort((a, b) => a.created_at.localeCompare(b.created_at));
@@ -736,14 +764,9 @@ function buildBoard(playerGuesses: Guess[], digits: number): Cell[] {
     if (g.feedback === "correct") {
       c.known = g.digit;
       pos++;
-    } else if (g.feedback === "higher") {
-      // guessed d, real > d
-      c.lower = Math.max(c.lower, g.digit);
-      c.wrongs.push(g.digit);
     } else {
-      // lower: real < d
-      c.upper = Math.min(c.upper, g.digit);
-      c.wrongs.push(g.digit);
+      // "higher": guessed d, real digit is higher. "lower": real digit is lower.
+      c.attempts.push({ digit: g.digit, feedback: g.feedback });
     }
   }
   return board;
@@ -755,7 +778,7 @@ function DigitBoard({ board, hideUnknown = false }: { board: Cell[]; hideUnknown
       {board.map((c, i) => (
         <div
           key={i}
-          className={`w-12 h-14 rounded-xl border-2 flex items-center justify-center text-2xl font-mono font-bold ${
+          className={`w-9 h-11 sm:w-12 sm:h-14 rounded-xl border-2 flex items-center justify-center text-lg sm:text-2xl font-mono font-bold ${
             c.known !== null
               ? "bg-success/15 border-success text-success"
               : "bg-input border-border text-muted-foreground"
@@ -768,39 +791,35 @@ function DigitBoard({ board, hideUnknown = false }: { board: Cell[]; hideUnknown
   );
 }
 
-function GuessHistory({ guesses, board }: { guesses: Guess[]; board: Cell[] }) {
-  if (guesses.length === 0) return null;
-  // Group by position (current unknown positions still have wrongs to show)
+function GuessHistory({ board }: { board: Cell[] }) {
+  const hasAttempts = board.some((c) => c.known === null && c.attempts.length > 0);
+  if (!hasAttempts) return null;
   return (
     <div className="mt-4 pt-4 border-t border-border">
       <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Rascunho</p>
       <div className="grid grid-cols-1 gap-1.5">
         {board.map((c, i) =>
-          c.known !== null ? null : c.wrongs.length === 0 ? null : (
+          c.known !== null || c.attempts.length === 0 ? null : (
             <div key={i} className="text-xs flex items-center gap-2 flex-wrap">
-              <span className="text-muted-foreground">{ordinal(i + 1)}:</span>
-              <span className="font-mono text-foreground">{hintForPosition(c)}</span>
-              <span className="text-muted-foreground">
-                (tentado: {c.wrongs.join(", ")})
-              </span>
+              <span className="text-muted-foreground shrink-0">{ordinal(i + 1)}:</span>
+              {c.attempts.map((a, j) => (
+                <span
+                  key={j}
+                  className={`font-mono px-1.5 py-0.5 rounded ${
+                    a.feedback === "higher"
+                      ? "bg-primary/10 text-primary"
+                      : "bg-accent/10 text-accent"
+                  }`}
+                >
+                  {a.digit} → {a.feedback === "higher" ? "maior" : "menor"}
+                </span>
+              ))}
             </div>
           ),
         )}
       </div>
     </div>
   );
-}
-
-function hintForPosition(c: Cell | undefined): string {
-  if (!c) return "";
-  if (c.known !== null) return `${c.known} ✓`;
-  const lo = c.lower + 1;
-  const hi = c.upper - 1;
-  if (lo === hi) return `só pode ser ${lo}`;
-  if (c.lower === -1 && c.upper === 10) return "entre 0 e 9";
-  if (c.lower === -1) return `menor que ${c.upper}`;
-  if (c.upper === 10) return `maior que ${c.lower}`;
-  return `entre ${lo} e ${hi}`;
 }
 
 function ordinal(n: number): string {

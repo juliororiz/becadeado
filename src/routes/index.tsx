@@ -115,7 +115,7 @@ function Home() {
                 value={joinId}
                 onChange={(e) => setJoinId(e.target.value.trim())}
                 placeholder="cole o ID aqui"
-                className="flex-1 h-12 px-4 rounded-xl bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary transition font-mono text-sm"
+                className="flex-1 min-w-0 h-12 px-4 rounded-xl bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary transition font-mono text-sm"
               />
               <button
                 onClick={joinRoom}

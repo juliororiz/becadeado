@@ -55,6 +55,27 @@ export type Database = {
           },
         ]
       }
+      player_wins: {
+        Row: {
+          display_name: string
+          name_key: string
+          updated_at: string
+          wins: number
+        }
+        Insert: {
+          display_name: string
+          name_key: string
+          updated_at?: string
+          wins?: number
+        }
+        Update: {
+          display_name?: string
+          name_key?: string
+          updated_at?: string
+          wins?: number
+        }
+        Relationships: []
+      }
       rooms: {
         Row: {
           created_at: string
@@ -120,7 +141,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      increment_player_wins: {
+        Args: { p_name: string }
+        Returns: number
+      }
     }
     Enums: {
       [_ in never]: never

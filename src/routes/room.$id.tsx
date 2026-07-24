@@ -1,10 +1,16 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Lock, LockOpen, Copy, Check, Share2, ArrowLeft, Sparkles, PartyPopper } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { getPlayerId } from "@/lib/player";
-import { playCorrectSound, playWinSound, playOpponentCorrectSound } from "@/lib/sound";
+import {
+  playCorrectSound,
+  playWinSound,
+  playOpponentCorrectSound,
+  playTomatoSplatSound,
+} from "@/lib/sound";
 import { vibrate } from "@/lib/haptics";
+import { isRoriz, getPlayerWins, incrementPlayerWins } from "@/lib/wins";
 import { toast, Toaster } from "sonner";
 
 export const Route = createFileRoute("/room/$id")({
@@ -60,8 +66,11 @@ function RoomPage() {
     digit: number;
     correct: boolean;
   } | null>(null);
+  const [tomatoHit, setTomatoHit] = useState(false);
+  const [opponentWins, setOpponentWins] = useState(0);
   const joinAttempted = useRef(false);
   const playerIdRef = useRef("");
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
     const id = getPlayerId();
@@ -75,6 +84,32 @@ function RoomPage() {
     const t = setTimeout(() => setOpponentGuess(null), 2000);
     return () => clearTimeout(t);
   }, [opponentGuess]);
+
+  // Auto-dismiss the tomato splat effect
+  useEffect(() => {
+    if (!tomatoHit) return;
+    const t = setTimeout(() => setTomatoHit(false), 2800);
+    return () => clearTimeout(t);
+  }, [tomatoHit]);
+
+  // Only Roriz needs to know the opponent's win tally (that's what unlocks the tomato)
+  useEffect(() => {
+    if (!room || !playerId) return;
+    const amICreator = room.creator_id === playerId;
+    const myNm = amICreator ? room.creator_name : room.joiner_name;
+    const opNm = amICreator ? room.joiner_name : room.creator_name;
+    if (!isRoriz(myNm) || !opNm) {
+      setOpponentWins(0);
+      return;
+    }
+    let cancelled = false;
+    getPlayerWins(opNm).then((w) => {
+      if (!cancelled) setOpponentWins(w);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [room?.creator_id, room?.joiner_id, room?.creator_name, room?.joiner_name, playerId]);
 
   // Initial load + realtime
   useEffect(() => {
@@ -136,13 +171,25 @@ function RoomPage() {
             .then(({ data }) => setGuesses(((data as unknown as Guess[]) ?? [])));
         },
       )
+      .on("broadcast", { event: "tomato" }, () => {
+        setTomatoHit(true);
+        playTomatoSplatSound();
+        vibrate([30, 40, 30, 50, 140]);
+      })
       .subscribe();
+    channelRef.current = ch;
 
     return () => {
       cancelled = true;
+      channelRef.current = null;
       supabase.removeChannel(ch);
     };
   }, [roomId]);
+
+  function throwTomato() {
+    channelRef.current?.send({ type: "broadcast", event: "tomato", payload: {} });
+    toast.success("Tomate jogado! 🍅");
+  }
 
   // Auto-join if we came from home with a pending name and slot is open
   useEffect(() => {
@@ -200,6 +247,8 @@ function RoomPage() {
   const isCreator = room.creator_id === playerId;
   const isJoiner = room.joiner_id === playerId;
   const isPlayer = isCreator || isJoiner;
+  const myName = isCreator ? room.creator_name : room.joiner_name;
+  const canThrowTomato = isRoriz(myName) && !!room.joiner_id && opponentWins > 10;
 
   // Spectator or joining
   if (!isPlayer) {
@@ -222,7 +271,8 @@ function RoomPage() {
   }
 
   return (
-    <Shell>
+    <Shell shake={tomatoHit}>
+      {tomatoHit && <TomatoSplat />}
       {opponentGuess && (
         <OpponentGuessModal
           text={
@@ -233,6 +283,7 @@ function RoomPage() {
           correct={opponentGuess.correct}
         />
       )}
+      {canThrowTomato && <TomatoButton onThrow={throwTomato} />}
       <Header room={room} playerId={playerId} onLeave={() => navigate({ to: "/" })} />
       <ScoreBar room={room} playerId={playerId} />
       {room.status === "waiting" && <WaitingView room={room} />}
@@ -319,9 +370,105 @@ function Confetti({ count = 28 }: { count?: number }) {
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function TomatoButton({ onThrow }: { onThrow: () => void }) {
   return (
-    <div className="min-h-screen bg-background text-foreground relative overflow-x-hidden">
+    <button
+      onClick={onThrow}
+      aria-label="Jogar tomate no adversário"
+      title="Jogar tomate no adversário"
+      className="fixed bottom-5 right-5 z-40 w-16 h-16 rounded-full bg-gradient-to-br from-red-500 to-red-700 border-4 border-white shadow-card flex items-center justify-center text-3xl hover:scale-110 active:scale-95 transition-transform animate-bounce-in"
+    >
+      🍅
+    </button>
+  );
+}
+
+function TomatoSplat() {
+  const splats = useMemo(
+    () =>
+      Array.from({ length: 14 }, (_, i) => ({
+        id: i,
+        left: Math.random() * 100,
+        top: Math.random() * 100,
+        size: 40 + Math.random() * 90,
+        delay: Math.random() * 0.15,
+      })),
+    [],
+  );
+  const drips = useMemo(
+    () =>
+      Array.from({ length: 10 }, (_, i) => ({
+        id: i,
+        left: 4 + i * 9.5 + Math.random() * 5,
+        width: 16 + Math.random() * 26,
+        height: 140 + Math.random() * 180,
+        delay: Math.random() * 0.3,
+      })),
+    [],
+  );
+  return (
+    <div
+      className="fixed inset-0 z-[100] pointer-events-none overflow-hidden animate-tomato-fade"
+      aria-hidden
+    >
+      <div className="absolute inset-0 bg-gradient-to-b from-red-600/85 via-red-700/80 to-red-900/75 animate-tomato-impact" />
+
+      {splats.map((s) => (
+        <span
+          key={s.id}
+          className="absolute rounded-full bg-red-800/60 blur-[2px] animate-tomato-splat-pop"
+          style={{
+            left: `${s.left}%`,
+            top: `${s.top}%`,
+            width: s.size,
+            height: s.size * (0.7 + Math.random() * 0.4),
+            animationDelay: `${s.delay}s`,
+          }}
+        />
+      ))}
+
+      {splats.slice(0, 8).map((s) => (
+        <span
+          key={`seed-${s.id}`}
+          className="absolute w-2 h-2 rounded-full bg-yellow-300/80 animate-tomato-splat-pop"
+          style={{
+            left: `${(s.left + 15) % 100}%`,
+            top: `${(s.top + 20) % 100}%`,
+            animationDelay: `${s.delay + 0.1}s`,
+          }}
+        />
+      ))}
+
+      {drips.map((d) => (
+        <span
+          key={d.id}
+          className="absolute top-0 bg-gradient-to-b from-red-600 to-red-800/90 animate-tomato-drip"
+          style={
+            {
+              left: `${d.left}%`,
+              width: d.width,
+              borderRadius: "0 0 50% 50% / 0 0 65% 65%",
+              animationDelay: `${d.delay}s`,
+              "--drip-h": `${d.height}px`,
+            } as CSSProperties
+          }
+        />
+      ))}
+
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="text-[7rem] drop-shadow-[0_6px_20px_rgba(0,0,0,0.5)] animate-tomato-splat-pop">
+          🍅💥
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function Shell({ children, shake = false }: { children: React.ReactNode; shake?: boolean }) {
+  return (
+    <div
+      className={`min-h-screen bg-background text-foreground relative overflow-x-hidden ${shake ? "animate-screen-shake" : ""}`}
+    >
       <Toaster theme="light" position="top-center" richColors />
       <div
         aria-hidden
@@ -682,6 +829,10 @@ function PlayView({
         }
       : { current_turn: opId };
     await supabase.from("rooms").update(patch as never).eq("id", room.id);
+    if (willWin) {
+      const myName = isCreator ? room.creator_name : room.joiner_name;
+      if (myName) void incrementPlayerWins(myName);
+    }
   }
 
   return (

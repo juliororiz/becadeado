@@ -37,3 +37,39 @@ export function playWinSound() {
 export function playOpponentCorrectSound() {
   tone(494, 0, 0.16, 0.12, "triangle");
 }
+
+function noiseBurst(start: number, duration: number, lowpassFreq: number, peak = 0.35) {
+  const c = getCtx();
+  if (!c) return;
+  const t0 = c.currentTime + start;
+  const bufferSize = Math.max(1, Math.floor(c.sampleRate * duration));
+  const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+  const noise = c.createBufferSource();
+  noise.buffer = buffer;
+
+  const filter = c.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(lowpassFreq, t0);
+  filter.frequency.exponentialRampToValueAtTime(Math.max(80, lowpassFreq * 0.15), t0 + duration);
+
+  const gain = c.createGain();
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(peak, t0 + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+
+  noise.connect(filter).connect(gain).connect(c.destination);
+  noise.start(t0);
+  noise.stop(t0 + duration + 0.05);
+}
+
+/** A wet, heavy "splat" — thud of impact + squelchy noise, like a tomato smashing on glass. */
+export function playTomatoSplatSound() {
+  tone(120, 0, 0.16, 0.5, "sine");
+  tone(70, 0.03, 0.22, 0.4, "sine");
+  noiseBurst(0, 0.35, 2200, 0.4);
+  noiseBurst(0.08, 0.5, 900, 0.3);
+  noiseBurst(0.32, 0.3, 500, 0.18);
+}

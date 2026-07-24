@@ -8,6 +8,10 @@ export function isRoriz(name: string | null | undefined): boolean {
   return normalizeName(name ?? "") === "roriz";
 }
 
+export function isBroz(name: string | null | undefined): boolean {
+  return normalizeName(name ?? "") === "broz";
+}
+
 export async function getPlayerWins(name: string): Promise<number> {
   const key = normalizeName(name);
   if (!key) return 0;

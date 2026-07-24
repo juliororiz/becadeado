@@ -8,9 +8,10 @@ import {
   playWinSound,
   playOpponentCorrectSound,
   playTomatoSplatSound,
+  playPoopSound,
 } from "@/lib/sound";
 import { vibrate } from "@/lib/haptics";
-import { isRoriz, getPlayerWins, incrementPlayerWins } from "@/lib/wins";
+import { isRoriz, isBroz, getPlayerWins, incrementPlayerWins } from "@/lib/wins";
 import { toast, Toaster } from "sonner";
 
 export const Route = createFileRoute("/room/$id")({
@@ -76,6 +77,7 @@ function RoomPage() {
     correct: boolean;
   } | null>(null);
   const [tomatoHit, setTomatoHit] = useState(false);
+  const [poopHit, setPoopHit] = useState(false);
   const [myWins, setMyWins] = useState(0);
   const [expired, setExpired] = useState(false);
   const joinAttempted = useRef(false);
@@ -101,6 +103,13 @@ function RoomPage() {
     const t = setTimeout(() => setTomatoHit(false), 2800);
     return () => clearTimeout(t);
   }, [tomatoHit]);
+
+  // Auto-dismiss the poop splat effect
+  useEffect(() => {
+    if (!poopHit) return;
+    const t = setTimeout(() => setPoopHit(false), 2800);
+    return () => clearTimeout(t);
+  }, [poopHit]);
 
   // Flip the room to expired the instant it hits 5 minutes without a 2nd
   // player — even if the cron sweep hasn't deleted the row yet.
@@ -203,6 +212,11 @@ function RoomPage() {
         playTomatoSplatSound();
         vibrate([30, 40, 30, 50, 140]);
       })
+      .on("broadcast", { event: "poop" }, () => {
+        setPoopHit(true);
+        playPoopSound();
+        vibrate([25, 60, 25, 60, 25]);
+      })
       .subscribe();
     channelRef.current = ch;
 
@@ -221,6 +235,16 @@ function RoomPage() {
     }
     channelRef.current?.send({ type: "broadcast", event: "tomato", payload: {} });
     toast.success("Tomate jogado! 🍅");
+  }
+
+  function throwPoop() {
+    const eligible = isBroz(myName) || myWins >= 10;
+    if (!eligible) {
+      toast.error("Você precisa ter 10 ou mais vitórias para jogar coco! 💩");
+      return;
+    }
+    channelRef.current?.send({ type: "broadcast", event: "poop", payload: {} });
+    toast.success("Coco jogado! 💩");
   }
 
   function bumpMyWins() {
@@ -303,7 +327,7 @@ function RoomPage() {
   const isJoiner = room.joiner_id === playerId;
   const isPlayer = isCreator || isJoiner;
   const myName = isCreator ? room.creator_name : room.joiner_name;
-  const canShowTomatoButton = !!room.joiner_id;
+  const canShowThrowButtons = !!room.joiner_id;
 
   // Spectator or joining
   if (!isPlayer) {
@@ -326,8 +350,9 @@ function RoomPage() {
   }
 
   return (
-    <Shell shake={tomatoHit}>
+    <Shell shake={tomatoHit || poopHit}>
       {tomatoHit && <TomatoSplat />}
+      {poopHit && <PoopSplat />}
       {opponentGuess && (
         <OpponentGuessModal
           text={
@@ -338,7 +363,12 @@ function RoomPage() {
           correct={opponentGuess.correct}
         />
       )}
-      {canShowTomatoButton && <TomatoButton onThrow={throwTomato} />}
+      {canShowThrowButtons && (
+        <div className="fixed bottom-5 right-5 z-40 flex flex-col gap-3">
+          <PoopButton onThrow={throwPoop} />
+          <TomatoButton onThrow={throwTomato} />
+        </div>
+      )}
       <Header room={room} playerId={playerId} onLeave={() => navigate({ to: "/" })} />
       <ScoreBar room={room} playerId={playerId} />
       {room.status === "waiting" && <WaitingView room={room} />}
@@ -437,9 +467,22 @@ function TomatoButton({ onThrow }: { onThrow: () => void }) {
       onClick={onThrow}
       aria-label="Jogar tomate no adversário"
       title="Jogar tomate no adversário"
-      className="fixed bottom-5 right-5 z-40 w-16 h-16 rounded-full bg-gradient-to-br from-red-500 to-red-700 border-4 border-white shadow-card flex items-center justify-center text-3xl hover:scale-110 active:scale-95 transition-transform animate-bounce-in"
+      className="w-16 h-16 rounded-full bg-gradient-to-br from-red-500 to-red-700 border-4 border-white shadow-card flex items-center justify-center text-3xl hover:scale-110 active:scale-95 transition-transform animate-bounce-in"
     >
       🍅
+    </button>
+  );
+}
+
+function PoopButton({ onThrow }: { onThrow: () => void }) {
+  return (
+    <button
+      onClick={onThrow}
+      aria-label="Jogar cocô no adversário"
+      title="Jogar cocô no adversário"
+      className="w-16 h-16 rounded-full bg-gradient-to-br from-[#a9752f] to-[#5c3a17] border-4 border-white shadow-card flex items-center justify-center text-3xl hover:scale-110 active:scale-95 transition-transform animate-bounce-in"
+    >
+      💩
     </button>
   );
 }
@@ -519,6 +562,87 @@ function TomatoSplat() {
       <div className="absolute inset-0 flex items-center justify-center">
         <span className="text-[7rem] drop-shadow-[0_6px_20px_rgba(0,0,0,0.5)] animate-tomato-splat-pop">
           🍅💥
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function PoopSplat() {
+  const splats = useMemo(
+    () =>
+      Array.from({ length: 14 }, (_, i) => ({
+        id: i,
+        left: Math.random() * 100,
+        top: Math.random() * 100,
+        size: 40 + Math.random() * 90,
+        delay: Math.random() * 0.15,
+      })),
+    [],
+  );
+  const drips = useMemo(
+    () =>
+      Array.from({ length: 10 }, (_, i) => ({
+        id: i,
+        left: 4 + i * 9.5 + Math.random() * 5,
+        width: 16 + Math.random() * 26,
+        height: 140 + Math.random() * 180,
+        delay: Math.random() * 0.3,
+      })),
+    [],
+  );
+  return (
+    <div
+      className="fixed inset-0 z-[100] pointer-events-none overflow-hidden animate-tomato-fade"
+      aria-hidden
+    >
+      <div className="absolute inset-0 bg-gradient-to-b from-[#8b5a2b]/85 via-[#6f4518]/80 to-[#3d2410]/75 animate-tomato-impact" />
+
+      {splats.map((s) => (
+        <span
+          key={s.id}
+          className="absolute rounded-full bg-[#4a2f10]/60 blur-[2px] animate-tomato-splat-pop"
+          style={{
+            left: `${s.left}%`,
+            top: `${s.top}%`,
+            width: s.size,
+            height: s.size * (0.7 + Math.random() * 0.4),
+            animationDelay: `${s.delay}s`,
+          }}
+        />
+      ))}
+
+      {splats.slice(0, 8).map((s) => (
+        <span
+          key={`fleck-${s.id}`}
+          className="absolute w-2 h-2 rounded-full bg-[#2e1c0a]/80 animate-tomato-splat-pop"
+          style={{
+            left: `${(s.left + 15) % 100}%`,
+            top: `${(s.top + 20) % 100}%`,
+            animationDelay: `${s.delay + 0.1}s`,
+          }}
+        />
+      ))}
+
+      {drips.map((d) => (
+        <span
+          key={d.id}
+          className="absolute top-0 bg-gradient-to-b from-[#8b5a2b] to-[#4a2f10]/90 animate-tomato-drip"
+          style={
+            {
+              left: `${d.left}%`,
+              width: d.width,
+              borderRadius: "0 0 50% 50% / 0 0 65% 65%",
+              animationDelay: `${d.delay}s`,
+              "--drip-h": `${d.height}px`,
+            } as CSSProperties
+          }
+        />
+      ))}
+
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="text-[7rem] drop-shadow-[0_6px_20px_rgba(0,0,0,0.5)] animate-tomato-splat-pop">
+          💩💥
         </span>
       </div>
     </div>

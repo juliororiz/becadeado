@@ -73,3 +73,27 @@ export function playTomatoSplatSound() {
   noiseBurst(0.08, 0.5, 900, 0.3);
   noiseBurst(0.32, 0.3, 500, 0.18);
 }
+
+function plop(start: number) {
+  const c = getCtx();
+  if (!c) return;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = "sine";
+  const t0 = c.currentTime + start;
+  osc.frequency.setValueAtTime(230, t0);
+  osc.frequency.exponentialRampToValueAtTime(85, t0 + 0.12);
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(0.45, t0 + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.16);
+  osc.connect(gain).connect(c.destination);
+  osc.start(t0);
+  osc.stop(t0 + 0.18);
+  noiseBurst(start, 0.14, 650, 0.22);
+}
+
+/** Two squelchy "ploc ploc" plops, like someone... you know. */
+export function playPoopSound() {
+  plop(0);
+  plop(0.26);
+}

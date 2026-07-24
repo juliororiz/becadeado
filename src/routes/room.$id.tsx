@@ -1,0 +1,808 @@
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Lock, Copy, Check, Share2, Trophy, ArrowLeft, Sparkles } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { getPlayerId } from "@/lib/player";
+import { toast, Toaster } from "sonner";
+
+export const Route = createFileRoute("/room/$id")({
+  head: () => ({
+    meta: [
+      { title: "Sala — Jogo do Cadeado" },
+      { name: "description", content: "Sala de partida do Jogo do Cadeado." },
+      { name: "robots", content: "noindex" },
+    ],
+  }),
+  component: RoomPage,
+});
+
+type Room = {
+  id: string;
+  room_number: number;
+  digits: number | null;
+  status: "waiting" | "setup" | "playing" | "finished" | "ended";
+  creator_id: string;
+  creator_name: string;
+  creator_secret: string | null;
+  joiner_id: string | null;
+  joiner_name: string | null;
+  joiner_secret: string | null;
+  current_turn: string | null;
+  winner_id: string | null;
+  creator_score: number;
+  joiner_score: number;
+  round: number;
+};
+
+type Guess = {
+  id: string;
+  room_id: string;
+  round: number;
+  player_id: string;
+  position: number;
+  digit: number;
+  feedback: "correct" | "lower" | "higher";
+  created_at: string;
+};
+
+function RoomPage() {
+  const { id: roomId } = Route.useParams();
+  const navigate = useNavigate();
+  const [playerId, setPlayerId] = useState("");
+  const [room, setRoom] = useState<Room | null>(null);
+  const [guesses, setGuesses] = useState<Guess[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+  const joinAttempted = useRef(false);
+
+  useEffect(() => {
+    setPlayerId(getPlayerId());
+  }, []);
+
+  // Initial load + realtime
+  useEffect(() => {
+    if (!roomId) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.from("rooms").select("*").eq("id", roomId).maybeSingle();
+      if (cancelled) return;
+      if (error || !data) {
+        setNotFound(true);
+        setLoading(false);
+        return;
+      }
+      setRoom(data as unknown as Room);
+      const { data: gs } = await supabase
+        .from("guesses")
+        .select("*")
+        .eq("room_id", roomId)
+        .order("created_at", { ascending: true });
+      if (!cancelled) setGuesses(((gs as unknown as Guess[]) ?? []));
+      setLoading(false);
+    })();
+
+    const ch = supabase
+      .channel(`room-${roomId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rooms", filter: `id=eq.${roomId}` },
+        (payload) => {
+          if (payload.new) setRoom(payload.new as Room);
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "guesses", filter: `room_id=eq.${roomId}` },
+        (payload) => {
+          setGuesses((prev) => [...prev, payload.new as Guess]);
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "guesses", filter: `room_id=eq.${roomId}` },
+        () => {
+          // easier: refetch on delete (used for new round)
+          supabase
+            .from("guesses")
+            .select("*")
+            .eq("room_id", roomId)
+            .order("created_at", { ascending: true })
+            .then(({ data }) => setGuesses(((data as unknown as Guess[]) ?? [])));
+        },
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(ch);
+    };
+  }, [roomId]);
+
+  // Auto-join if we came from home with a pending name and slot is open
+  useEffect(() => {
+    if (!room || !playerId || joinAttempted.current) return;
+    if (room.creator_id === playerId) return;
+    if (room.joiner_id === playerId) return;
+    if (room.joiner_id) return; // full
+    joinAttempted.current = true;
+    const pending = localStorage.getItem("cadeado_pending_name");
+    if (pending) {
+      localStorage.removeItem("cadeado_pending_name");
+      joinAs(pending);
+    }
+    // else: NameGate will render for user to type their name
+  }, [room, playerId]);
+
+  async function joinAs(name: string) {
+    if (!room) return;
+    const { error } = await supabase
+      .from("rooms")
+      .update({
+        joiner_id: playerId,
+        joiner_name: name,
+        status: "setup",
+      } as never)
+      .eq("id", room.id)
+      .is("joiner_id", null);
+    if (error) toast.error(error.message);
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-muted-foreground">Carregando...</div>
+      </div>
+    );
+  }
+
+  if (notFound || !room) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <div className="text-center">
+          <p className="text-foreground mb-4">Sala não encontrada.</p>
+          <button
+            onClick={() => navigate({ to: "/" })}
+            className="px-5 h-11 rounded-xl bg-primary text-primary-foreground font-semibold"
+          >
+            Voltar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const isCreator = room.creator_id === playerId;
+  const isJoiner = room.joiner_id === playerId;
+  const isPlayer = isCreator || isJoiner;
+
+  // Spectator or joining
+  if (!isPlayer) {
+    if (room.joiner_id) {
+      return (
+        <Shell>
+          <div className="text-center py-10">
+            <p className="text-foreground text-lg">Esta sala já está cheia.</p>
+            <button
+              onClick={() => navigate({ to: "/" })}
+              className="mt-4 px-5 h-11 rounded-xl bg-primary text-primary-foreground font-semibold"
+            >
+              Voltar
+            </button>
+          </div>
+        </Shell>
+      );
+    }
+    return <NameGate roomNumber={room.room_number} onSubmit={joinAs} />;
+  }
+
+  return (
+    <Shell>
+      <Toaster theme="dark" position="top-center" richColors />
+      <Header room={room} playerId={playerId} onLeave={() => navigate({ to: "/" })} />
+      <ScoreBar room={room} playerId={playerId} />
+      {room.status === "waiting" && <WaitingView room={room} />}
+      {room.status === "setup" && (
+        <SetupView room={room} isCreator={isCreator} playerId={playerId} />
+      )}
+      {(room.status === "playing" || room.status === "finished") && (
+        <PlayView room={room} playerId={playerId} guesses={guesses} isCreator={isCreator} />
+      )}
+      {room.status === "ended" && (
+        <div className="text-center py-10">
+          <p className="text-lg text-foreground">O jogo foi encerrado.</p>
+          <button
+            onClick={() => navigate({ to: "/" })}
+            className="mt-4 px-5 h-11 rounded-xl bg-primary text-primary-foreground font-semibold"
+          >
+            Voltar ao início
+          </button>
+        </div>
+      )}
+    </Shell>
+  );
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <Toaster theme="dark" position="top-center" richColors />
+      <div className="max-w-2xl mx-auto p-4 md:p-8">{children}</div>
+    </div>
+  );
+}
+
+function Header({ room, playerId, onLeave }: { room: Room; playerId: string; onLeave: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const isCreator = room.creator_id === playerId;
+  const url = typeof window !== "undefined" ? `${window.location.origin}/room/${room.id}` : "";
+
+  async function share() {
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: `Sala ${room.room_number} — Cadeado`, url });
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    await navigator.clipboard.writeText(url);
+    setCopied(true);
+    toast.success("Link copiado!");
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <div className="flex items-center justify-between mb-6">
+      <button
+        onClick={onLeave}
+        className="w-10 h-10 rounded-xl bg-card border border-border flex items-center justify-center hover:bg-secondary transition"
+        aria-label="Sair"
+      >
+        <ArrowLeft className="w-5 h-5" />
+      </button>
+      <div className="flex items-center gap-2">
+        <Lock className="w-5 h-5 text-primary" />
+        <h1 className="text-xl font-bold">Sala {room.room_number}</h1>
+      </div>
+      {isCreator ? (
+        <button
+          onClick={share}
+          className="h-10 px-3 rounded-xl bg-primary text-primary-foreground font-semibold flex items-center gap-2"
+        >
+          {copied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+          <span className="text-sm">Convidar</span>
+        </button>
+      ) : (
+        <div className="w-10" />
+      )}
+    </div>
+  );
+}
+
+function ScoreBar({ room, playerId }: { room: Room; playerId: string }) {
+  const meIsCreator = room.creator_id === playerId;
+  const myName = meIsCreator ? room.creator_name : room.joiner_name ?? "Você";
+  const opName = meIsCreator ? room.joiner_name ?? "Aguardando..." : room.creator_name;
+  const myScore = meIsCreator ? room.creator_score : room.joiner_score;
+  const opScore = meIsCreator ? room.joiner_score : room.creator_score;
+  return (
+    <div className="grid grid-cols-2 gap-3 mb-6">
+      <PlayerCard name={`${myName} (você)`} score={myScore} accent />
+      <PlayerCard name={opName} score={opScore} />
+    </div>
+  );
+}
+
+function PlayerCard({ name, score, accent = false }: { name: string; score: number; accent?: boolean }) {
+  return (
+    <div
+      className={`rounded-2xl border p-4 ${
+        accent ? "border-primary/40 bg-primary/5" : "border-border bg-card"
+      }`}
+    >
+      <p className="text-xs uppercase tracking-wider text-muted-foreground truncate">{name}</p>
+      <p className="text-3xl font-black mt-1 tabular-nums">{score}</p>
+    </div>
+  );
+}
+
+function WaitingView({ room }: { room: Room }) {
+  const url = typeof window !== "undefined" ? `${window.location.origin}/room/${room.id}` : "";
+  return (
+    <div className="rounded-2xl border border-border bg-card p-6 text-center">
+      <div className="animate-pulse w-16 h-16 rounded-2xl bg-primary/15 border border-primary/30 mx-auto flex items-center justify-center mb-4">
+        <Lock className="w-8 h-8 text-primary" />
+      </div>
+      <h2 className="text-lg font-bold">Aguardando 2º jogador...</h2>
+      <p className="text-sm text-muted-foreground mt-1">Compartilhe este link para começar</p>
+      <div className="mt-4 p-3 rounded-xl bg-input border border-border flex items-center gap-2">
+        <span className="text-xs font-mono truncate flex-1 text-left">{url}</span>
+        <button
+          onClick={() => {
+            navigator.clipboard.writeText(url);
+            toast.success("Copiado!");
+          }}
+          className="p-2 rounded-lg bg-secondary hover:brightness-110"
+        >
+          <Copy className="w-4 h-4" />
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground mt-3">
+        ID: <span className="font-mono">{room.id}</span>
+      </p>
+    </div>
+  );
+}
+
+function NameGate({ roomNumber, onSubmit }: { roomNumber: number; onSubmit: (n: string) => void }) {
+  const [name, setName] = useState("");
+  return (
+    <Shell>
+      <div className="max-w-md mx-auto mt-16">
+        <div className="rounded-2xl border border-border bg-card p-6">
+          <h2 className="text-xl font-bold">Entrar na sala {roomNumber}</h2>
+          <p className="text-sm text-muted-foreground mt-1">Como você quer ser chamado?</p>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value.slice(0, 24))}
+            placeholder="Seu nome"
+            className="mt-4 w-full h-12 px-4 rounded-xl bg-input border border-border focus:outline-none focus:border-primary"
+          />
+          <button
+            onClick={() => name.trim() && onSubmit(name.trim())}
+            className="mt-4 w-full h-12 rounded-xl bg-primary text-primary-foreground font-semibold"
+          >
+            Entrar
+          </button>
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
+function SetupView({
+  room,
+  isCreator,
+  playerId,
+}: {
+  room: Room;
+  isCreator: boolean;
+  playerId: string;
+}) {
+  const [digits, setDigits] = useState(room.digits ?? 4);
+  const [secret, setSecret] = useState("");
+  const mySecret = isCreator ? room.creator_secret : room.joiner_secret;
+  const opSecret = isCreator ? room.joiner_secret : room.creator_secret;
+
+  async function chooseDigits() {
+    const { error } = await supabase
+      .from("rooms")
+      .update({ digits } as never)
+      .eq("id", room.id);
+    if (error) toast.error(error.message);
+  }
+
+  async function submitSecret() {
+    if (!room.digits) return;
+    if (secret.length !== room.digits || !/^\d+$/.test(secret)) {
+      return toast.error(`Digite exatamente ${room.digits} algarismos`);
+    }
+    const patch: Record<string, unknown> = isCreator
+      ? { creator_secret: secret }
+      : { joiner_secret: secret };
+    // If the other secret is already set, move to playing
+    if ((isCreator ? room.joiner_secret : room.creator_secret) != null) {
+      patch.status = "playing";
+      patch.current_turn = room.creator_id; // creator goes first
+      patch.winner_id = null;
+    }
+    const { error } = await supabase.from("rooms").update(patch as never).eq("id", room.id);
+    if (error) toast.error(error.message);
+    else toast.success("Número secreto salvo!");
+  }
+
+  // Step 1: creator picks digit count
+  if (room.digits == null) {
+    if (!isCreator) {
+      return (
+        <div className="rounded-2xl border border-border bg-card p-6 text-center">
+          <p className="text-foreground">
+            Aguardando <b>{room.creator_name}</b> escolher a quantidade de algarismos...
+          </p>
+        </div>
+      );
+    }
+    return (
+      <div className="rounded-2xl border border-border bg-card p-6">
+        <h2 className="text-lg font-bold">Quantos algarismos?</h2>
+        <p className="text-sm text-muted-foreground">De 1 a 10 dígitos.</p>
+        <div className="mt-5 flex items-center gap-4">
+          <input
+            type="range"
+            min={1}
+            max={10}
+            value={digits}
+            onChange={(e) => setDigits(Number(e.target.value))}
+            className="flex-1 accent-[oklch(0.82_0.16_78)]"
+          />
+          <div className="w-16 h-16 rounded-2xl bg-primary/15 border border-primary/40 flex items-center justify-center text-3xl font-black text-primary tabular-nums">
+            {digits}
+          </div>
+        </div>
+        <button
+          onClick={chooseDigits}
+          className="mt-5 w-full h-12 rounded-xl bg-primary text-primary-foreground font-semibold"
+        >
+          Confirmar
+        </button>
+      </div>
+    );
+  }
+
+  // Step 2: each player enters secret
+  return (
+    <div className="rounded-2xl border border-border bg-card p-6">
+      <h2 className="text-lg font-bold">
+        Escolha seu número secreto <span className="text-primary">({room.digits} algarismos)</span>
+      </h2>
+      <p className="text-sm text-muted-foreground mt-1">
+        Seu adversário vai tentar adivinhar dígito a dígito.
+      </p>
+
+      {mySecret ? (
+        <div className="mt-5 p-4 rounded-xl bg-success/10 border border-success/30 text-center">
+          <p className="text-sm text-muted-foreground">Seu número:</p>
+          <p className="text-3xl font-black tracking-widest text-success mt-1 font-mono">
+            {mySecret}
+          </p>
+          <p className="text-xs text-muted-foreground mt-3">
+            {opSecret
+              ? "Iniciando partida..."
+              : `Aguardando ${
+                  isCreator ? room.joiner_name : room.creator_name
+                } escolher o número...`}
+          </p>
+        </div>
+      ) : (
+        <>
+          <input
+            value={secret}
+            onChange={(e) => setSecret(e.target.value.replace(/\D/g, "").slice(0, room.digits!))}
+            placeholder={"0".repeat(room.digits)}
+            inputMode="numeric"
+            autoFocus
+            className="mt-5 w-full h-16 px-4 rounded-xl bg-input border border-border text-center text-3xl font-mono tracking-widest focus:outline-none focus:border-primary"
+          />
+          <button
+            onClick={submitSecret}
+            disabled={secret.length !== room.digits}
+            className="mt-4 w-full h-12 rounded-xl bg-primary text-primary-foreground font-semibold disabled:opacity-40"
+          >
+            Confirmar segredo
+          </button>
+        </>
+      )}
+      <p className="text-xs text-muted-foreground mt-3 text-center">
+        {playerId ? "" : ""}
+      </p>
+    </div>
+  );
+}
+
+function PlayView({
+  room,
+  playerId,
+  guesses,
+  isCreator,
+}: {
+  room: Room;
+  playerId: string;
+  guesses: Guess[];
+  isCreator: boolean;
+}) {
+  const digits = room.digits ?? 0;
+  const opId = isCreator ? room.joiner_id! : room.creator_id;
+  const opSecret = (isCreator ? room.joiner_secret : room.creator_secret) ?? "";
+  const mySecret = (isCreator ? room.creator_secret : room.joiner_secret) ?? "";
+
+  const roundGuesses = guesses.filter((g) => g.round === room.round);
+  const myGuesses = roundGuesses.filter((g) => g.player_id === playerId);
+  const opGuesses = roundGuesses.filter((g) => g.player_id === opId);
+
+  const myBoard = buildBoard(myGuesses, digits);
+  const opBoard = buildBoard(opGuesses, digits);
+
+  const myProgress = myBoard.filter((c) => c.known !== null).length;
+  const isMyTurn = room.current_turn === playerId && room.status === "playing";
+  const [guess, setGuess] = useState<string>("");
+  const winner =
+    room.status === "finished"
+      ? room.winner_id === room.creator_id
+        ? room.creator_name
+        : room.joiner_name
+      : null;
+
+  async function submitGuess() {
+    if (!isMyTurn) return;
+    if (!/^\d$/.test(guess)) return toast.error("Digite 1 algarismo (0-9)");
+    const d = Number(guess);
+    const pos = myProgress; // next unknown
+    const target = Number(opSecret[pos]);
+    const feedback: Guess["feedback"] =
+      d === target ? "correct" : d < target ? "higher" : "lower";
+    const { error } = await supabase.from("guesses").insert({
+      room_id: room.id,
+      round: room.round,
+      player_id: playerId,
+      position: pos,
+      digit: d,
+      feedback,
+    } as never);
+    if (error) return toast.error(error.message);
+    setGuess("");
+
+    const willWin = feedback === "correct" && pos + 1 === digits;
+    const patch: Record<string, unknown> = willWin
+      ? {
+          status: "finished",
+          winner_id: playerId,
+          current_turn: null,
+          creator_score: isCreator ? room.creator_score + 1 : room.creator_score,
+          joiner_score: isCreator ? room.joiner_score : room.joiner_score + 1,
+        }
+      : { current_turn: opId };
+    await supabase.from("rooms").update(patch as never).eq("id", room.id);
+    if (willWin) toast.success("Você venceu!", { icon: "🏆" });
+  }
+
+  return (
+    <div className="space-y-4">
+      {room.status === "finished" && (
+        <div className="rounded-2xl border border-primary/40 bg-primary/10 p-5 text-center shadow-glow">
+          <Trophy className="w-8 h-8 text-primary mx-auto mb-2" />
+          <p className="text-lg font-bold">
+            {room.winner_id === playerId ? "Você venceu!" : `${winner} venceu!`}
+          </p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Número do adversário era{" "}
+            <span className="font-mono text-foreground">{opSecret}</span>
+          </p>
+        </div>
+      )}
+
+      {/* Your target: opponent's secret you're trying to guess */}
+      <div className="rounded-2xl border border-border bg-card p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold">🎯 Descobrir número de {isCreator ? room.joiner_name : room.creator_name}</h3>
+          <span className="text-xs text-muted-foreground">
+            {myProgress}/{digits}
+          </span>
+        </div>
+        <DigitBoard board={myBoard} />
+        <GuessHistory guesses={myGuesses} board={myBoard} />
+      </div>
+
+      {/* Turn / input */}
+      {room.status === "playing" && (
+        <div
+          className={`rounded-2xl border p-5 ${
+            isMyTurn ? "border-primary bg-primary/5 shadow-glow" : "border-border bg-card"
+          }`}
+        >
+          {isMyTurn ? (
+            <>
+              <p className="text-sm text-muted-foreground">
+                Sua vez — adivinhe o <b>{ordinal(myProgress + 1)}</b> algarismo
+              </p>
+              <div className="mt-3 flex gap-2">
+                <input
+                  value={guess}
+                  onChange={(e) => setGuess(e.target.value.replace(/\D/g, "").slice(0, 1))}
+                  inputMode="numeric"
+                  autoFocus
+                  onKeyDown={(e) => e.key === "Enter" && submitGuess()}
+                  className="flex-1 h-14 px-4 rounded-xl bg-input border border-border text-center text-2xl font-mono focus:outline-none focus:border-primary"
+                  placeholder="?"
+                />
+                <button
+                  onClick={submitGuess}
+                  className="h-14 px-6 rounded-xl bg-primary text-primary-foreground font-bold"
+                >
+                  <Sparkles className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Dica: {hintForPosition(myBoard[myProgress])}
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-center text-muted-foreground py-3">
+              Vez de <b className="text-foreground">
+                {room.current_turn === room.creator_id ? room.creator_name : room.joiner_name}
+              </b>
+              ...
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Opponent's board (against your secret) */}
+      <div className="rounded-2xl border border-border bg-card p-5">
+        <h3 className="font-bold mb-3">
+          🔒 Seu número secreto{" "}
+          <span className="font-mono text-primary">{mySecret}</span>
+        </h3>
+        <p className="text-xs text-muted-foreground mb-2">
+          Progresso do adversário: {opBoard.filter((c) => c.known !== null).length}/{digits}
+        </p>
+        <DigitBoard board={opBoard} hideUnknown />
+      </div>
+
+      {room.status === "finished" && (
+        <NextRoundControls room={room} isCreator={isCreator} />
+      )}
+    </div>
+  );
+}
+
+function NextRoundControls({ room, isCreator }: { room: Room; isCreator: boolean }) {
+  const [newDigits, setNewDigits] = useState(room.digits ?? 4);
+
+  async function newRound() {
+    await supabase.from("guesses").delete().eq("room_id", room.id);
+    await supabase
+      .from("rooms")
+      .update({
+        digits: newDigits,
+        status: "setup",
+        creator_secret: null,
+        joiner_secret: null,
+        current_turn: null,
+        winner_id: null,
+        round: room.round + 1,
+      } as never)
+      .eq("id", room.id);
+  }
+
+  async function endGame() {
+    await supabase.from("rooms").update({ status: "ended" } as never).eq("id", room.id);
+  }
+
+  if (!isCreator) {
+    return (
+      <div className="rounded-2xl border border-border bg-card p-5 text-center text-sm text-muted-foreground">
+        Aguardando {room.creator_name} iniciar a próxima rodada...
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <h3 className="font-bold">Nova rodada?</h3>
+      <p className="text-sm text-muted-foreground mt-1">Escolha a quantidade de algarismos.</p>
+      <div className="mt-4 flex items-center gap-4">
+        <input
+          type="range"
+          min={1}
+          max={10}
+          value={newDigits}
+          onChange={(e) => setNewDigits(Number(e.target.value))}
+          className="flex-1 accent-[oklch(0.82_0.16_78)]"
+        />
+        <div className="w-14 h-14 rounded-xl bg-primary/15 border border-primary/40 flex items-center justify-center text-2xl font-black text-primary">
+          {newDigits}
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button
+          onClick={newRound}
+          className="h-12 rounded-xl bg-primary text-primary-foreground font-semibold"
+        >
+          Jogar novamente
+        </button>
+        <button
+          onClick={endGame}
+          className="h-12 rounded-xl bg-secondary text-secondary-foreground font-semibold"
+        >
+          Encerrar jogo
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// -------- helpers --------
+
+type Cell = {
+  known: number | null;
+  lower: number; // exclusive; digit must be > lower
+  upper: number; // exclusive; digit must be < upper
+  wrongs: number[];
+};
+
+function buildBoard(playerGuesses: Guess[], digits: number): Cell[] {
+  const board: Cell[] = Array.from({ length: digits }, () => ({
+    known: null,
+    lower: -1,
+    upper: 10,
+    wrongs: [],
+  }));
+  // Sort by created_at
+  const sorted = [...playerGuesses].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  let pos = 0;
+  for (const g of sorted) {
+    if (pos >= digits) break;
+    const c = board[pos];
+    if (g.feedback === "correct") {
+      c.known = g.digit;
+      pos++;
+    } else if (g.feedback === "higher") {
+      // guessed d, real > d
+      c.lower = Math.max(c.lower, g.digit);
+      c.wrongs.push(g.digit);
+    } else {
+      // lower: real < d
+      c.upper = Math.min(c.upper, g.digit);
+      c.wrongs.push(g.digit);
+    }
+  }
+  return board;
+}
+
+function DigitBoard({ board, hideUnknown = false }: { board: Cell[]; hideUnknown?: boolean }) {
+  return (
+    <div className="flex flex-wrap gap-2 justify-center">
+      {board.map((c, i) => (
+        <div
+          key={i}
+          className={`w-12 h-14 rounded-xl border-2 flex items-center justify-center text-2xl font-mono font-bold ${
+            c.known !== null
+              ? "bg-success/15 border-success text-success"
+              : "bg-input border-border text-muted-foreground"
+          }`}
+        >
+          {c.known !== null ? c.known : hideUnknown ? "•" : "?"}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GuessHistory({ guesses, board }: { guesses: Guess[]; board: Cell[] }) {
+  if (guesses.length === 0) return null;
+  // Group by position (current unknown positions still have wrongs to show)
+  return (
+    <div className="mt-4 pt-4 border-t border-border">
+      <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Rascunho</p>
+      <div className="grid grid-cols-1 gap-1.5">
+        {board.map((c, i) =>
+          c.known !== null ? null : c.wrongs.length === 0 ? null : (
+            <div key={i} className="text-xs flex items-center gap-2 flex-wrap">
+              <span className="text-muted-foreground">{ordinal(i + 1)}:</span>
+              <span className="font-mono text-foreground">{hintForPosition(c)}</span>
+              <span className="text-muted-foreground">
+                (tentado: {c.wrongs.join(", ")})
+              </span>
+            </div>
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
+function hintForPosition(c: Cell | undefined): string {
+  if (!c) return "";
+  if (c.known !== null) return `${c.known} ✓`;
+  const lo = c.lower + 1;
+  const hi = c.upper - 1;
+  if (lo === hi) return `só pode ser ${lo}`;
+  if (c.lower === -1 && c.upper === 10) return "entre 0 e 9";
+  if (c.lower === -1) return `menor que ${c.upper}`;
+  if (c.upper === 10) return `maior que ${c.lower}`;
+  return `entre ${lo} e ${hi}`;
+}
+
+function ordinal(n: number): string {
+  return `${n}º`;
+}

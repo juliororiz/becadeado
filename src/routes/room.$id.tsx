@@ -6,8 +6,8 @@ import { getPlayerId } from "@/lib/player";
 import {
   playCorrectSound,
   playWinSound,
-  playOpponentCorrectSound,
-  playTomatoSplatSound,
+  playDeuRuimSound,
+  playTomaSound,
   playPoopSound,
 } from "@/lib/sound";
 import { vibrate } from "@/lib/haptics";
@@ -189,7 +189,7 @@ function RoomPage() {
             setOpponentGuess({ position: inserted.position, digit: inserted.digit, correct });
             if (correct) {
               vibrate(20);
-              playOpponentCorrectSound();
+              playDeuRuimSound();
             }
           }
         },
@@ -209,7 +209,7 @@ function RoomPage() {
       )
       .on("broadcast", { event: "tomato" }, () => {
         setTomatoHit(true);
-        playTomatoSplatSound();
+        playTomaSound();
         vibrate([30, 40, 30, 50, 140]);
       })
       .on("broadcast", { event: "poop" }, () => {

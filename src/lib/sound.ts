@@ -34,8 +34,18 @@ export function playWinSound() {
   [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, i * 0.09, 0.24, 0.22));
 }
 
-export function playOpponentCorrectSound() {
-  tone(494, 0, 0.16, 0.12, "triangle");
+function playFile(path: string, volume = 1) {
+  if (typeof window === "undefined") return;
+  const audio = new Audio(path);
+  audio.volume = volume;
+  void audio.play().catch(() => {
+    /* ignore autoplay restrictions */
+  });
+}
+
+/** "Deu ruim!" — the opponent just correctly guessed one of your digits. */
+export function playDeuRuimSound() {
+  playFile("/audio/deu-ruim.ogg");
 }
 
 function noiseBurst(start: number, duration: number, lowpassFreq: number, peak = 0.35) {
@@ -65,13 +75,9 @@ function noiseBurst(start: number, duration: number, lowpassFreq: number, peak =
   noise.stop(t0 + duration + 0.05);
 }
 
-/** A wet, heavy "splat" — thud of impact + squelchy noise, like a tomato smashing on glass. */
-export function playTomatoSplatSound() {
-  tone(120, 0, 0.16, 0.5, "sine");
-  tone(70, 0.03, 0.22, 0.4, "sine");
-  noiseBurst(0, 0.35, 2200, 0.4);
-  noiseBurst(0.08, 0.5, 900, 0.3);
-  noiseBurst(0.32, 0.3, 500, 0.18);
+/** "Toma!" — you just got hit by a tomato. */
+export function playTomaSound() {
+  playFile("/audio/toma.ogg");
 }
 
 function plop(start: number) {

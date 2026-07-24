@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;600;700;800;900&display=swap');
 @import "tailwindcss" source(none);
 @source "../src";
 @import "tw-animate-css";
@@ -29,43 +30,64 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
+  --color-grape: var(--grape);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --shadow-glow: 0 0 40px -6px var(--primary);
-  --shadow-card: 0 8px 32px -12px rgb(0 0 0 / 0.5);
+  --font-sans: "Nunito", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Baloo 2", "Nunito", ui-sans-serif, system-ui, sans-serif;
+  --shadow-glow: 0 0 40px -6px color-mix(in oklch, var(--primary) 45%, transparent);
+  --shadow-card: 0 10px 30px -12px color-mix(in oklch, var(--ink-shadow) 22%, transparent);
 }
 
 :root {
-  --radius: 0.875rem;
-  --background: oklch(0.18 0.02 260);
-  --foreground: oklch(0.97 0.01 90);
-  --card: oklch(0.22 0.025 260);
-  --card-foreground: oklch(0.97 0.01 90);
-  --popover: oklch(0.22 0.025 260);
-  --popover-foreground: oklch(0.97 0.01 90);
-  --primary: oklch(0.82 0.16 78);
-  --primary-foreground: oklch(0.2 0.03 260);
-  --secondary: oklch(0.3 0.03 260);
-  --secondary-foreground: oklch(0.97 0.01 90);
-  --muted: oklch(0.26 0.02 260);
-  --muted-foreground: oklch(0.68 0.02 260);
-  --accent: oklch(0.72 0.14 200);
-  --accent-foreground: oklch(0.2 0.03 260);
-  --destructive: oklch(0.65 0.22 25);
+  --radius: 1.1rem;
+  --ink-shadow: oklch(0.3 0.08 300);
+
+  /* Cloud — warm, friendly canvas (not sterile white) */
+  --background: oklch(0.97 0.02 55);
+  --foreground: oklch(0.27 0.08 300);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.27 0.08 300);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.27 0.08 300);
+
+  /* Bubblegum — primary CTA */
+  --primary: oklch(0.66 0.24 355);
+  --primary-foreground: oklch(1 0 0);
+
+  /* Soft lavender surface */
+  --secondary: oklch(0.93 0.035 300);
+  --secondary-foreground: oklch(0.44 0.19 300);
+
+  --muted: oklch(0.96 0.02 300);
+  --muted-foreground: oklch(0.55 0.05 300);
+
+  /* Sky/teal — info + "menor" feedback */
+  --accent: oklch(0.62 0.11 220);
+  --accent-foreground: oklch(1 0 0);
+
+  /* Grape — headline/emphasis accent */
+  --grape: oklch(0.56 0.24 305);
+
+  --destructive: oklch(0.64 0.22 25);
   --destructive-foreground: oklch(0.98 0.005 90);
-  --success: oklch(0.72 0.17 150);
-  --success-foreground: oklch(0.15 0.03 150);
-  --border: oklch(0.3 0.02 260);
-  --input: oklch(0.24 0.02 260);
-  --ring: oklch(0.82 0.16 78);
+
+  /* Mint — correct / win */
+  --success: oklch(0.68 0.19 155);
+  --success-foreground: oklch(0.98 0.03 155);
+
+  --border: oklch(0.9 0.03 300);
+  --input: oklch(0.98 0.015 55);
+  --ring: oklch(0.66 0.24 355);
 }
 
 @utility shadow-glow {
-  box-shadow: 0 0 40px -6px oklch(0.82 0.16 78 / 0.4);
+  box-shadow: 0 0 40px -6px color-mix(in oklch, var(--primary) 45%, transparent);
 }
 @utility shadow-card {
-  box-shadow: 0 10px 40px -14px rgb(0 0 0 / 0.6);
+  box-shadow: 0 10px 30px -14px color-mix(in oklch, var(--ink-shadow) 30%, transparent);
 }
 
 @layer base {
@@ -75,6 +97,78 @@
   html, body {
     background-color: var(--color-background);
     color: var(--color-foreground);
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--font-sans);
+  }
+  h1, h2, h3 {
+    font-family: var(--font-display);
+  }
+}
+
+/* -------- playful motion system -------- */
+
+@keyframes bounce-in {
+  0% { transform: scale(0.3) translateY(40px); opacity: 0; }
+  50% { transform: scale(1.15) translateY(-8px); opacity: 1; }
+  70% { transform: scale(0.94) translateY(2px); }
+  100% { transform: scale(1) translateY(0); }
+}
+.animate-bounce-in {
+  animation: bounce-in 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes pop-in {
+  0% { transform: scale(0.85) translateY(-6px); opacity: 0; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+.animate-pop-in {
+  animation: pop-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes confetti-fall {
+  0% { transform: translateY(-16px) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(150px) rotate(560deg); opacity: 0; }
+}
+.animate-confetti-fall {
+  animation: confetti-fall 1.15s ease-in forwards;
+}
+
+@keyframes unlock-wiggle {
+  0% { transform: rotate(0deg) scale(1); }
+  20% { transform: rotate(-18deg) scale(1.12); }
+  40% { transform: rotate(14deg) scale(1.16); }
+  60% { transform: rotate(-8deg) scale(1.1); }
+  80% { transform: rotate(4deg) scale(1.04); }
+  100% { transform: rotate(0deg) scale(1); }
+}
+.animate-unlock-wiggle {
+  animation: unlock-wiggle 0.8s ease-in-out both;
+}
+
+@keyframes float-blob {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(12px, -16px) scale(1.06); }
+}
+.animate-float-blob {
+  animation: float-blob 7s ease-in-out infinite;
+}
+
+@keyframes tile-flip {
+  0% { transform: scale(1) rotate(0deg); }
+  40% { transform: scale(1.18) rotate(-4deg); }
+  70% { transform: scale(0.96) rotate(2deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+.animate-tile-flip {
+  animation: tile-flip 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-bounce-in,
+  .animate-pop-in,
+  .animate-confetti-fall,
+  .animate-unlock-wiggle,
+  .animate-float-blob,
+  .animate-tile-flip {
+    animation: none !important;
   }
 }

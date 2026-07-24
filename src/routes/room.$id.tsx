@@ -1,8 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Lock, Copy, Check, Share2, Trophy, ArrowLeft, Sparkles } from "lucide-react";
+import { Lock, LockOpen, Copy, Check, Share2, ArrowLeft, Sparkles, PartyPopper } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { getPlayerId } from "@/lib/player";
+import { playCorrectSound, playWinSound, playOpponentCorrectSound } from "@/lib/sound";
+import { vibrate } from "@/lib/haptics";
 import { toast, Toaster } from "sonner";
 
 export const Route = createFileRoute("/room/$id")({
@@ -53,9 +55,11 @@ function RoomPage() {
   const [guesses, setGuesses] = useState<Guess[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [opponentGuess, setOpponentGuess] = useState<{ position: number; digit: number } | null>(
-    null,
-  );
+  const [opponentGuess, setOpponentGuess] = useState<{
+    position: number;
+    digit: number;
+    correct: boolean;
+  } | null>(null);
   const joinAttempted = useRef(false);
   const playerIdRef = useRef("");
 
@@ -110,7 +114,12 @@ function RoomPage() {
           const inserted = payload.new as Guess;
           setGuesses((prev) => [...prev, inserted]);
           if (inserted.player_id !== playerIdRef.current) {
-            setOpponentGuess({ position: inserted.position, digit: inserted.digit });
+            const correct = inserted.feedback === "correct";
+            setOpponentGuess({ position: inserted.position, digit: inserted.digit, correct });
+            if (correct) {
+              vibrate(20);
+              playOpponentCorrectSound();
+            }
           }
         },
       )
@@ -214,10 +223,14 @@ function RoomPage() {
 
   return (
     <Shell>
-      <Toaster theme="dark" position="top-center" richColors />
       {opponentGuess && (
         <OpponentGuessModal
-          text={`O adversário acha que o ${ordinal(opponentGuess.position + 1)} número é ${opponentGuess.digit}`}
+          text={
+            opponentGuess.correct
+              ? `O adversário acertou o número ${opponentGuess.digit}!`
+              : `O adversário acha que o ${ordinal(opponentGuess.position + 1)} número é ${opponentGuess.digit}`
+          }
+          correct={opponentGuess.correct}
         />
       )}
       <Header room={room} playerId={playerId} onLeave={() => navigate({ to: "/" })} />
@@ -244,21 +257,82 @@ function RoomPage() {
   );
 }
 
-function OpponentGuessModal({ text }: { text: string }) {
+function OpponentGuessModal({ text, correct }: { text: string; correct: boolean }) {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 sm:pt-24 px-4 pointer-events-none">
-      <div className="pointer-events-auto w-full max-w-xs sm:max-w-sm rounded-2xl border border-primary/40 bg-card/95 backdrop-blur px-4 sm:px-5 py-3 sm:py-4 shadow-glow text-center animate-in fade-in zoom-in-95 duration-200">
-        <p className="text-sm font-semibold text-foreground">{text}</p>
+      <div
+        className={`pointer-events-auto w-full max-w-xs sm:max-w-sm rounded-2xl border-2 backdrop-blur px-4 sm:px-5 py-3 sm:py-4 shadow-card text-center animate-bounce-in ${
+          correct
+            ? "border-success bg-success/15 text-success"
+            : "border-primary/40 bg-card/95 text-foreground"
+        }`}
+      >
+        <p className="text-sm font-extrabold">
+          {correct ? "🎯 " : ""}
+          {text}
+        </p>
       </div>
+    </div>
+  );
+}
+
+const CONFETTI_COLORS = [
+  "oklch(0.66 0.24 355)", // bubblegum
+  "oklch(0.75 0.18 85)", // sunshine
+  "oklch(0.62 0.11 220)", // sky
+  "oklch(0.56 0.24 305)", // grape
+  "oklch(0.68 0.19 155)", // mint
+];
+
+function Confetti({ count = 28 }: { count?: number }) {
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: count }, (_, i) => ({
+        id: i,
+        left: Math.random() * 100,
+        delay: Math.random() * 0.35,
+        duration: 0.9 + Math.random() * 0.6,
+        size: 6 + Math.random() * 6,
+        color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+        rounded: Math.random() > 0.5,
+      })),
+    [count],
+  );
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+      {pieces.map((p) => (
+        <span
+          key={p.id}
+          className="absolute top-0 animate-confetti-fall"
+          style={{
+            left: `${p.left}%`,
+            width: p.size,
+            height: p.size,
+            backgroundColor: p.color,
+            borderRadius: p.rounded ? "9999px" : "3px",
+            animationDelay: `${p.delay}s`,
+            animationDuration: `${p.duration}s`,
+          }}
+        />
+      ))}
     </div>
   );
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <Toaster theme="dark" position="top-center" richColors />
-      <div className="max-w-2xl mx-auto p-3 sm:p-6 md:p-8">{children}</div>
+    <div className="min-h-screen bg-background text-foreground relative overflow-x-hidden">
+      <Toaster theme="light" position="top-center" richColors />
+      <div
+        aria-hidden
+        className="pointer-events-none fixed -top-24 -left-16 w-72 h-72 rounded-full bg-primary/20 blur-3xl animate-float-blob"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none fixed -bottom-24 -right-16 w-72 h-72 rounded-full bg-accent/20 blur-3xl animate-float-blob"
+        style={{ animationDelay: "1.5s" }}
+      />
+      <div className="max-w-2xl mx-auto p-3 sm:p-6 md:p-8 relative">{children}</div>
     </div>
   );
 }
@@ -333,7 +407,7 @@ function PlayerCard({ name, score, accent = false }: { name: string; score: numb
       }`}
     >
       <p className="text-xs uppercase tracking-wider text-muted-foreground truncate">{name}</p>
-      <p className="text-3xl font-black mt-1 tabular-nums">{score}</p>
+      <p className="text-3xl font-display font-extrabold mt-1 tabular-nums">{score}</p>
     </div>
   );
 }
@@ -341,27 +415,38 @@ function PlayerCard({ name, score, accent = false }: { name: string; score: numb
 function WaitingView({ room }: { room: Room }) {
   const url = typeof window !== "undefined" ? `${window.location.origin}/room/${room.id}` : "";
   return (
-    <div className="rounded-2xl border border-border bg-card p-6 text-center">
-      <div className="animate-pulse w-16 h-16 rounded-2xl bg-primary/15 border border-primary/30 mx-auto flex items-center justify-center mb-4">
+    <div className="rounded-2xl border-2 border-border bg-card p-6 text-center">
+      <div className="animate-pulse w-16 h-16 rounded-2xl bg-primary/15 border-2 border-primary/30 mx-auto flex items-center justify-center mb-4">
         <Lock className="w-8 h-8 text-primary" />
       </div>
       <h2 className="text-lg font-bold">Aguardando 2º jogador...</h2>
-      <p className="text-sm text-muted-foreground mt-1">Compartilhe este link para começar</p>
-      <div className="mt-4 p-3 rounded-xl bg-input border border-border flex items-center gap-2">
-        <span className="text-xs font-mono truncate min-w-0 flex-1 text-left">{url}</span>
+      <p className="text-sm text-muted-foreground mt-1">Compartilhe o código com seu amigo</p>
+
+      <div className="mt-4 flex items-center justify-center gap-2">
+        <span className="text-3xl font-display font-extrabold tracking-[0.15em] text-primary">
+          {room.id}
+        </span>
         <button
           onClick={() => {
-            navigator.clipboard.writeText(url);
-            toast.success("Copiado!");
+            navigator.clipboard.writeText(room.id);
+            toast.success("Código copiado!");
           }}
           className="p-2 rounded-lg bg-secondary hover:brightness-110"
+          aria-label="Copiar código"
         >
           <Copy className="w-4 h-4" />
         </button>
       </div>
-      <p className="text-xs text-muted-foreground mt-3">
-        ID: <span className="font-mono">{room.id}</span>
-      </p>
+
+      <button
+        onClick={() => {
+          navigator.clipboard.writeText(url);
+          toast.success("Link copiado!");
+        }}
+        className="mt-3 text-xs text-muted-foreground underline hover:text-foreground"
+      >
+        ou copiar o link do convite
+      </button>
     </div>
   );
 }
@@ -457,7 +542,7 @@ function SetupView({
             onChange={(e) => setDigits(Number(e.target.value))}
             className="flex-1 accent-[oklch(0.82_0.16_78)]"
           />
-          <div className="w-16 h-16 rounded-2xl bg-primary/15 border border-primary/40 flex items-center justify-center text-3xl font-black text-primary tabular-nums">
+          <div className="w-16 h-16 rounded-2xl bg-primary/15 border border-primary/40 flex items-center justify-center text-3xl font-display font-extrabold text-primary tabular-nums">
             {digits}
           </div>
         </div>
@@ -484,7 +569,7 @@ function SetupView({
       {mySecret ? (
         <div className="mt-5 p-4 rounded-xl bg-success/10 border border-success/30 text-center">
           <p className="text-sm text-muted-foreground">Seu número:</p>
-          <p className="text-3xl font-black tracking-widest text-success mt-1 font-mono">
+          <p className="text-3xl font-display font-extrabold tracking-widest text-success mt-1">
             {mySecret}
           </p>
           <p className="text-xs text-muted-foreground mt-3">
@@ -503,7 +588,7 @@ function SetupView({
             placeholder={"0".repeat(room.digits)}
             inputMode="numeric"
             autoFocus
-            className="mt-5 w-full h-16 px-4 rounded-xl bg-input border border-border text-center text-3xl font-mono tracking-widest focus:outline-none focus:border-primary"
+            className="mt-5 w-full h-16 px-4 rounded-xl bg-input border border-border text-center text-3xl font-display font-bold tracking-widest focus:outline-none focus:border-primary"
           />
           <button
             onClick={submitSecret}
@@ -547,12 +632,19 @@ function PlayView({
   const myProgress = myBoard.filter((c) => c.known !== null).length;
   const isMyTurn = room.current_turn === playerId && room.status === "playing";
   const [guess, setGuess] = useState<string>("");
+  const [celebration, setCelebration] = useState<number | null>(null);
   const winner =
     room.status === "finished"
       ? room.winner_id === room.creator_id
         ? room.creator_name
         : room.joiner_name
       : null;
+
+  useEffect(() => {
+    if (celebration === null) return;
+    const t = setTimeout(() => setCelebration(null), 1600);
+    return () => clearTimeout(t);
+  }, [celebration]);
 
   async function submitGuess() {
     if (!isMyTurn) return;
@@ -574,6 +666,12 @@ function PlayView({
     setGuess("");
 
     const willWin = feedback === "correct" && pos + 1 === digits;
+    if (feedback === "correct") {
+      playCorrectSound();
+      vibrate(willWin ? [50, 30, 50, 30, 90] : 35);
+      if (willWin) playWinSound();
+      else setCelebration(d);
+    }
     const patch: Record<string, unknown> = willWin
       ? {
           status: "finished",
@@ -584,20 +682,35 @@ function PlayView({
         }
       : { current_turn: opId };
     await supabase.from("rooms").update(patch as never).eq("id", room.id);
-    if (willWin) toast.success("Você venceu!", { icon: "🏆" });
   }
 
   return (
     <div className="space-y-4">
+      {celebration !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 pointer-events-none">
+          <div className="relative pointer-events-auto overflow-hidden rounded-3xl border-2 border-success bg-card px-8 py-6 shadow-card text-center animate-bounce-in">
+            <Confetti count={20} />
+            <PartyPopper className="w-8 h-8 text-success mx-auto mb-1" />
+            <p className="text-2xl font-display font-extrabold text-success">Acertou!</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              O dígito era <span className="font-display font-bold text-foreground">{celebration}</span>
+            </p>
+          </div>
+        </div>
+      )}
+
       {room.status === "finished" && (
-        <div className="rounded-2xl border border-primary/40 bg-primary/10 p-5 text-center shadow-glow">
-          <Trophy className="w-8 h-8 text-primary mx-auto mb-2" />
-          <p className="text-lg font-bold">
-            {room.winner_id === playerId ? "Você venceu!" : `${winner} venceu!`}
+        <div className="relative overflow-hidden rounded-2xl border-2 border-success bg-success/10 p-5 text-center shadow-glow animate-bounce-in">
+          {room.winner_id === playerId && <Confetti />}
+          <div className="mx-auto mb-2 w-14 h-14 rounded-2xl bg-success/20 flex items-center justify-center animate-unlock-wiggle">
+            <LockOpen className="w-7 h-7 text-success" />
+          </div>
+          <p className="text-xl font-display font-extrabold text-success">
+            {room.winner_id === playerId ? "Você venceu! 🎉" : `${winner} venceu!`}
           </p>
           <p className="text-sm text-muted-foreground mt-1">
             Número do adversário era{" "}
-            <span className="font-mono text-foreground">{opSecret}</span>
+            <span className="font-display font-bold text-foreground">{opSecret}</span>
           </p>
         </div>
       )}
@@ -633,7 +746,7 @@ function PlayView({
                   inputMode="numeric"
                   autoFocus
                   onKeyDown={(e) => e.key === "Enter" && submitGuess()}
-                  className="w-full h-14 px-4 rounded-xl bg-input border border-border text-center text-2xl font-mono focus:outline-none focus:border-primary"
+                  className="w-full h-14 px-4 rounded-xl bg-input border border-border text-center text-2xl font-display font-bold focus:outline-none focus:border-primary"
                   placeholder="?"
                 />
                 <button
@@ -660,7 +773,7 @@ function PlayView({
       <div className="rounded-2xl border border-border bg-card p-5">
         <h3 className="font-bold mb-3">
           🔒 Seu número secreto{" "}
-          <span className="font-mono text-primary">{mySecret}</span>
+          <span className="font-display font-bold text-primary">{mySecret}</span>
         </h3>
         <p className="text-xs text-muted-foreground mb-2">
           Progresso do adversário: {opBoard.filter((c) => c.known !== null).length}/{digits}
@@ -719,7 +832,7 @@ function NextRoundControls({ room, isCreator }: { room: Room; isCreator: boolean
           onChange={(e) => setNewDigits(Number(e.target.value))}
           className="flex-1 accent-[oklch(0.82_0.16_78)]"
         />
-        <div className="w-14 h-14 rounded-xl bg-primary/15 border border-primary/40 flex items-center justify-center text-2xl font-black text-primary">
+        <div className="w-14 h-14 rounded-xl bg-primary/15 border border-primary/40 flex items-center justify-center text-2xl font-display font-extrabold text-primary">
           {newDigits}
         </div>
       </div>
@@ -778,9 +891,9 @@ function DigitBoard({ board, hideUnknown = false }: { board: Cell[]; hideUnknown
       {board.map((c, i) => (
         <div
           key={i}
-          className={`w-9 h-11 sm:w-12 sm:h-14 rounded-xl border-2 flex items-center justify-center text-lg sm:text-2xl font-mono font-bold ${
+          className={`w-9 h-11 sm:w-12 sm:h-14 rounded-xl border-2 flex items-center justify-center text-lg sm:text-2xl font-display font-bold ${
             c.known !== null
-              ? "bg-success/15 border-success text-success"
+              ? "bg-success/15 border-success text-success animate-tile-flip"
               : "bg-input border-border text-muted-foreground"
           }`}
         >
@@ -805,7 +918,7 @@ function GuessHistory({ board }: { board: Cell[] }) {
               {c.attempts.map((a, j) => (
                 <span
                   key={j}
-                  className={`font-mono px-1.5 py-0.5 rounded ${
+                  className={`font-display font-bold px-1.5 py-0.5 rounded-lg ${
                     a.feedback === "higher"
                       ? "bg-primary/10 text-primary"
                       : "bg-accent/10 text-accent"

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Lock, Plus, LogIn } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { getPlayerId } from "@/lib/player";
+import { generateRoomCode } from "@/lib/roomCode";
 import { toast } from "sonner";
 import { Toaster } from "sonner";
 
@@ -38,19 +39,33 @@ function Home() {
     if (!name.trim()) return toast.error("Digite seu nome");
     setCreating(true);
     const playerId = getPlayerId();
-    const { data, error } = await supabase
-      .from("rooms")
-      .insert({
-        creator_id: playerId,
-        creator_name: name.trim(),
-        status: "waiting",
-      } as never)
-      .select()
-      .single();
+    const trimmedName = name.trim();
+
+    let lastError: { code?: string; message: string } | null = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = generateRoomCode(trimmedName);
+      const { data, error } = await supabase
+        .from("rooms")
+        .insert({
+          id: code,
+          creator_id: playerId,
+          creator_name: trimmedName,
+          status: "waiting",
+        } as never)
+        .select()
+        .single();
+      if (!error && data) {
+        setCreating(false);
+        const roomId = (data as { id: string }).id;
+        localStorage.setItem(`cadeado_name_${roomId}`, trimmedName);
+        navigate({ to: "/room/$id", params: { id: roomId } });
+        return;
+      }
+      lastError = error;
+      if (error?.code !== "23505") break; // only retry on code collision
+    }
     setCreating(false);
-    if (error || !data) return toast.error(error?.message ?? "Erro ao criar sala");
-    localStorage.setItem(`cadeado_name_${(data as { id: string }).id}`, name.trim());
-    navigate({ to: "/room/$id", params: { id: (data as { id: string }).id } });
+    toast.error(lastError?.message ?? "Erro ao criar sala");
   }
 
   async function joinRoom() {
@@ -58,27 +73,44 @@ function Home() {
     if (!joinId.trim()) return toast.error("Digite o ID da sala");
     setJoining(true);
     localStorage.setItem(`cadeado_pending_name`, name.trim());
-    navigate({ to: "/room/$id", params: { id: joinId.trim() } });
+    navigate({ to: "/room/$id", params: { id: joinId.trim().toUpperCase() } });
     setJoining(false);
   }
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <Toaster theme="dark" position="top-center" richColors />
-      <div className="w-full max-w-md">
+    <div className="min-h-screen bg-background flex items-center justify-center p-4 relative overflow-hidden">
+      <Toaster theme="light" position="top-center" richColors />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -top-20 -left-20 w-72 h-72 rounded-full bg-primary/20 blur-3xl animate-float-blob"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -bottom-24 -right-16 w-80 h-80 rounded-full bg-grape/20 blur-3xl animate-float-blob"
+        style={{ animationDelay: "1.2s" }}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute top-1/3 right-6 w-40 h-40 rounded-full bg-success/20 blur-3xl animate-float-blob"
+        style={{ animationDelay: "2.4s" }}
+      />
+      <div className="w-full max-w-md relative">
         <div className="flex flex-col items-center mb-8">
-          <div className="w-20 h-20 rounded-3xl bg-primary/15 border border-primary/30 flex items-center justify-center mb-4 shadow-glow">
+          <div className="w-20 h-20 rounded-3xl bg-primary/15 border-2 border-primary/30 flex items-center justify-center mb-4 shadow-glow animate-bounce-in">
             <Lock className="w-10 h-10 text-primary" strokeWidth={2.2} />
           </div>
-          <h1 className="text-4xl font-black tracking-tight text-foreground">
-            Jogo do <span className="text-primary">Cadeado</span>
+          <h1 className="text-4xl font-display font-extrabold tracking-tight text-foreground">
+            Jogo do{" "}
+            <span className="bg-gradient-to-r from-primary to-grape bg-clip-text text-transparent">
+              Cadeado
+            </span>
           </h1>
           <p className="text-muted-foreground text-sm mt-2 text-center">
             Adivinhe o número secreto do seu adversário, dígito a dígito.
           </p>
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-6 space-y-5 shadow-card">
+        <div className="rounded-2xl border-2 border-border bg-card p-6 space-y-5 shadow-card">
           <div>
             <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Seu nome
@@ -108,14 +140,14 @@ function Home() {
 
           <div>
             <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              ID da sala
+              Código da sala
             </label>
             <div className="mt-2 flex gap-2">
               <input
                 value={joinId}
-                onChange={(e) => setJoinId(e.target.value.trim())}
-                placeholder="cole o ID aqui"
-                className="flex-1 min-w-0 h-12 px-4 rounded-xl bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary transition font-mono text-sm"
+                onChange={(e) => setJoinId(e.target.value.trim().toUpperCase().slice(0, 8))}
+                placeholder="Ex.: J482910O"
+                className="flex-1 min-w-0 h-12 px-4 rounded-xl bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary transition font-display font-bold tracking-widest text-sm"
               />
               <button
                 onClick={joinRoom}

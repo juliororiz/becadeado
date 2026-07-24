@@ -14,7 +14,107 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      guesses: {
+        Row: {
+          created_at: string
+          digit: number
+          feedback: string
+          id: string
+          player_id: string
+          position: number
+          room_id: string
+          round: number
+        }
+        Insert: {
+          created_at?: string
+          digit: number
+          feedback: string
+          id?: string
+          player_id: string
+          position: number
+          room_id: string
+          round: number
+        }
+        Update: {
+          created_at?: string
+          digit?: number
+          feedback?: string
+          id?: string
+          player_id?: string
+          position?: number
+          room_id?: string
+          round?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "guesses_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rooms: {
+        Row: {
+          created_at: string
+          creator_id: string
+          creator_name: string
+          creator_score: number
+          creator_secret: string | null
+          current_turn: string | null
+          digits: number | null
+          id: string
+          joiner_id: string | null
+          joiner_name: string | null
+          joiner_score: number
+          joiner_secret: string | null
+          room_number: number
+          round: number
+          status: string
+          updated_at: string
+          winner_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          creator_id: string
+          creator_name: string
+          creator_score?: number
+          creator_secret?: string | null
+          current_turn?: string | null
+          digits?: number | null
+          id?: string
+          joiner_id?: string | null
+          joiner_name?: string | null
+          joiner_score?: number
+          joiner_secret?: string | null
+          room_number?: number
+          round?: number
+          status?: string
+          updated_at?: string
+          winner_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          creator_id?: string
+          creator_name?: string
+          creator_score?: number
+          creator_secret?: string | null
+          current_turn?: string | null
+          digits?: number | null
+          id?: string
+          joiner_id?: string | null
+          joiner_name?: string | null
+          joiner_score?: number
+          joiner_secret?: string | null
+          room_number?: number
+          round?: number
+          status?: string
+          updated_at?: string
+          winner_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

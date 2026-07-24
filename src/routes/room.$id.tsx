@@ -67,7 +67,7 @@ function RoomPage() {
     correct: boolean;
   } | null>(null);
   const [tomatoHit, setTomatoHit] = useState(false);
-  const [opponentWins, setOpponentWins] = useState(0);
+  const [myWins, setMyWins] = useState(0);
   const joinAttempted = useRef(false);
   const playerIdRef = useRef("");
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -92,19 +92,18 @@ function RoomPage() {
     return () => clearTimeout(t);
   }, [tomatoHit]);
 
-  // Only Roriz needs to know the opponent's win tally (that's what unlocks the tomato)
+  // Track my own win tally — it's what unlocks the tomato (Roriz gets it for free)
   useEffect(() => {
     if (!room || !playerId) return;
     const amICreator = room.creator_id === playerId;
     const myNm = amICreator ? room.creator_name : room.joiner_name;
-    const opNm = amICreator ? room.joiner_name : room.creator_name;
-    if (!isRoriz(myNm) || !opNm) {
-      setOpponentWins(0);
+    if (!myNm) {
+      setMyWins(0);
       return;
     }
     let cancelled = false;
-    getPlayerWins(opNm).then((w) => {
-      if (!cancelled) setOpponentWins(w);
+    getPlayerWins(myNm).then((w) => {
+      if (!cancelled) setMyWins(w);
     });
     return () => {
       cancelled = true;
@@ -187,8 +186,17 @@ function RoomPage() {
   }, [roomId]);
 
   function throwTomato() {
+    const eligible = isRoriz(myName) || myWins >= 10;
+    if (!eligible) {
+      toast.error("Você precisa ter 10 ou mais vitórias para jogar tomate! 🍅");
+      return;
+    }
     channelRef.current?.send({ type: "broadcast", event: "tomato", payload: {} });
     toast.success("Tomate jogado! 🍅");
+  }
+
+  function bumpMyWins() {
+    setMyWins((w) => w + 1);
   }
 
   // Auto-join if we came from home with a pending name and slot is open
@@ -248,7 +256,7 @@ function RoomPage() {
   const isJoiner = room.joiner_id === playerId;
   const isPlayer = isCreator || isJoiner;
   const myName = isCreator ? room.creator_name : room.joiner_name;
-  const canThrowTomato = isRoriz(myName) && !!room.joiner_id && opponentWins > 10;
+  const canShowTomatoButton = !!room.joiner_id;
 
   // Spectator or joining
   if (!isPlayer) {
@@ -283,7 +291,7 @@ function RoomPage() {
           correct={opponentGuess.correct}
         />
       )}
-      {canThrowTomato && <TomatoButton onThrow={throwTomato} />}
+      {canShowTomatoButton && <TomatoButton onThrow={throwTomato} />}
       <Header room={room} playerId={playerId} onLeave={() => navigate({ to: "/" })} />
       <ScoreBar room={room} playerId={playerId} />
       {room.status === "waiting" && <WaitingView room={room} />}
@@ -291,7 +299,13 @@ function RoomPage() {
         <SetupView room={room} isCreator={isCreator} playerId={playerId} />
       )}
       {(room.status === "playing" || room.status === "finished") && (
-        <PlayView room={room} playerId={playerId} guesses={guesses} isCreator={isCreator} />
+        <PlayView
+          room={room}
+          playerId={playerId}
+          guesses={guesses}
+          isCreator={isCreator}
+          onWin={bumpMyWins}
+        />
       )}
       {room.status === "ended" && (
         <div className="text-center py-10">
@@ -758,11 +772,13 @@ function PlayView({
   playerId,
   guesses,
   isCreator,
+  onWin,
 }: {
   room: Room;
   playerId: string;
   guesses: Guess[];
   isCreator: boolean;
+  onWin: () => void;
 }) {
   const digits = room.digits ?? 0;
   const opId = isCreator ? room.joiner_id! : room.creator_id;
@@ -832,6 +848,7 @@ function PlayView({
     if (willWin) {
       const myName = isCreator ? room.creator_name : room.joiner_name;
       if (myName) void incrementPlayerWins(myName);
+      onWin();
     }
   }
 

@@ -40,7 +40,16 @@ type Room = {
   creator_score: number;
   joiner_score: number;
   round: number;
+  created_at: string;
 };
+
+// A room link that never gets a 2nd player dies after this long — kept in
+// sync with the `expire-waiting-rooms` pg_cron job that sweeps the DB row.
+const ROOM_EXPIRY_MS = 5 * 60 * 1000;
+
+function isRoomExpired(r: Pick<Room, "status" | "created_at">): boolean {
+  return r.status === "waiting" && Date.now() - new Date(r.created_at).getTime() >= ROOM_EXPIRY_MS;
+}
 
 type Guess = {
   id: string;
@@ -68,6 +77,7 @@ function RoomPage() {
   } | null>(null);
   const [tomatoHit, setTomatoHit] = useState(false);
   const [myWins, setMyWins] = useState(0);
+  const [expired, setExpired] = useState(false);
   const joinAttempted = useRef(false);
   const playerIdRef = useRef("");
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -91,6 +101,19 @@ function RoomPage() {
     const t = setTimeout(() => setTomatoHit(false), 2800);
     return () => clearTimeout(t);
   }, [tomatoHit]);
+
+  // Flip the room to expired the instant it hits 5 minutes without a 2nd
+  // player — even if the cron sweep hasn't deleted the row yet.
+  useEffect(() => {
+    if (!room || room.status !== "waiting") return;
+    if (isRoomExpired(room)) {
+      setExpired(true);
+      return;
+    }
+    const remaining = new Date(room.created_at).getTime() + ROOM_EXPIRY_MS - Date.now();
+    const t = setTimeout(() => setExpired(true), remaining);
+    return () => clearTimeout(t);
+  }, [room?.status, room?.created_at]);
 
   // Track my own win tally — it's what unlocks the tomato (Roriz gets it for free)
   useEffect(() => {
@@ -138,6 +161,11 @@ function RoomPage() {
         "postgres_changes",
         { event: "*", schema: "public", table: "rooms", filter: `id=eq.${roomId}` },
         (payload) => {
+          if (payload.eventType === "DELETE") {
+            // Only ever happens via the expire-waiting-rooms cron sweep.
+            setExpired(true);
+            return;
+          }
           if (payload.new) setRoom(payload.new as Room);
         },
       )
@@ -201,7 +229,7 @@ function RoomPage() {
 
   // Auto-join if we came from home with a pending name and slot is open
   useEffect(() => {
-    if (!room || !playerId || joinAttempted.current) return;
+    if (!room || !playerId || joinAttempted.current || expired) return;
     if (room.creator_id === playerId) return;
     if (room.joiner_id === playerId) return;
     if (room.joiner_id) return; // full
@@ -212,7 +240,7 @@ function RoomPage() {
       joinAs(pending);
     }
     // else: NameGate will render for user to type their name
-  }, [room, playerId]);
+  }, [room, playerId, expired]);
 
   async function joinAs(name: string) {
     if (!room) return;
@@ -236,11 +264,30 @@ function RoomPage() {
     );
   }
 
+  if (expired) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <div className="text-center max-w-sm">
+          <p className="text-foreground text-lg font-bold mb-1">Este link expirou ⏱️</p>
+          <p className="text-muted-foreground text-sm mb-4">
+            A sala não foi completada por dois jogadores em 5 minutos e não está mais disponível.
+          </p>
+          <button
+            onClick={() => navigate({ to: "/" })}
+            className="px-5 h-11 rounded-xl bg-primary text-primary-foreground font-semibold"
+          >
+            Voltar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (notFound || !room) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
         <div className="text-center">
-          <p className="text-foreground mb-4">Sala não encontrada.</p>
+          <p className="text-foreground mb-4">Sala não encontrada. O link pode ter expirado.</p>
           <button
             onClick={() => navigate({ to: "/" })}
             className="px-5 h-11 rounded-xl bg-primary text-primary-foreground font-semibold"
@@ -575,6 +622,20 @@ function PlayerCard({ name, score, accent = false }: { name: string; score: numb
 
 function WaitingView({ room }: { room: Room }) {
   const url = typeof window !== "undefined" ? `${window.location.origin}/room/${room.id}` : "";
+  const [remainingMs, setRemainingMs] = useState(() =>
+    Math.max(0, new Date(room.created_at).getTime() + ROOM_EXPIRY_MS - Date.now()),
+  );
+
+  useEffect(() => {
+    const i = setInterval(() => {
+      setRemainingMs(Math.max(0, new Date(room.created_at).getTime() + ROOM_EXPIRY_MS - Date.now()));
+    }, 1000);
+    return () => clearInterval(i);
+  }, [room.created_at]);
+
+  const remainingMin = Math.floor(remainingMs / 60000);
+  const remainingSec = Math.floor((remainingMs % 60000) / 1000);
+
   return (
     <div className="rounded-2xl border-2 border-border bg-card p-6 text-center">
       <div className="animate-pulse w-16 h-16 rounded-2xl bg-primary/15 border-2 border-primary/30 mx-auto flex items-center justify-center mb-4">
@@ -582,6 +643,12 @@ function WaitingView({ room }: { room: Room }) {
       </div>
       <h2 className="text-lg font-bold">Aguardando 2º jogador...</h2>
       <p className="text-sm text-muted-foreground mt-1">Compartilhe o código com seu amigo</p>
+      <p className="text-xs text-muted-foreground mt-1">
+        O link expira em{" "}
+        <span className="font-display font-bold tabular-nums">
+          {remainingMin}:{String(remainingSec).padStart(2, "0")}
+        </span>
+      </p>
 
       <div className="mt-4 flex items-center justify-center gap-2">
         <span className="text-3xl font-display font-extrabold tracking-[0.15em] text-primary">
